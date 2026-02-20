@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Facebook Birthday Auto Poster</title>
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      
+      <div>
+        <div class="title"><img src="dashboard-icon.png" style="width:32px;height:32px;border-radius:8px;margin-right:10px;vertical-align:middle;">Facebook Birthday Auto Poster</div>
+        <div class="subtitle">Standalone</div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="runNowBtn" class="btn primary">Run Now</button>
+      <button id="testBtn" class="btn">Test Fetch</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="card settingsCard">
+      <div class="cardTitle">Settings</div>
+
+      <div class="channelBlock">
+        <div class="row channelHeader">
+          <label class="label">Enable Timeline Posts</label>
+          <label class="switch">
+            <input type="checkbox" id="enabled" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div id="timelineFields" class="channelFields">
+          <div class="row">
+            <label class="label" for="timelineSendTime">Daily timeline post time (local)</label>
+            <input id="timelineSendTime" type="time" class="input" />
+          </div>
+
+          <div class="row">
+            <label class="label" for="timelineMessageTemplate">Timeline message template</label>
+            <textarea id="timelineMessageTemplate" class="textarea" rows="3" placeholder="Happy Birthday {first_name}!"></textarea>
+            <div class="hint">Use <b>{first_name}</b> to insert the friend’s name (when available).</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="channelBlock">
+        <div class="row channelHeader">
+          <label class="label">Enable Messenger Beta</label>
+          <label class="switch">
+            <input type="checkbox" id="messengerBetaEnabled" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div id="messengerFields" class="channelFields">
+          <div class="row">
+            <label class="label" for="messengerSendTime">Daily messenger send time (local)</label>
+            <input id="messengerSendTime" type="time" class="input" />
+          </div>
+          <div class="row">
+            <label class="label" for="messengerMessageTemplate">Messenger message template</label>
+            <textarea id="messengerMessageTemplate" class="textarea" rows="3" placeholder="Happy Birthday {first_name}!"></textarea>
+            <div class="hint">Beta is opt-in. When enabled, birthdays are sent as private Messenger messages automatically.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <label class="label">Dry run (no posting)</label>
+        <label class="switch">
+          <input type="checkbox" id="dryRun" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="row buttons">
+        <button id="saveBtn" class="btn primary">Save</button>
+      </div>
+
+      <div class="note">
+        To work, you must be logged into Facebook in this Chrome profile.
+      </div>
+    </section>
+
+    <section class="card logCard">
+      <div class="cardTitle rowBetween logHeader">
+        <div class="logHeaderLeft">
+          <span>Live Activity Log</span>
+          <label class="verboseToggle">
+            <input type="checkbox" id="verboseLog" />
+            <span>Verbose</span>
+          </label>
+        </div>
+        <button id="clearLogBtn" class="btn danger small">Clear</button>
+      </div>
+
+      <div id="log" class="log"></div>
+    </section>
+  </main>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
