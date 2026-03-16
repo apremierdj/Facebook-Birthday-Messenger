@@ -136,7 +136,7 @@ async function loadState() {
   els.timelineMessageTemplate.value = s.timelineMessageTemplate || s.messageTemplate || "Happy Birthday {first_name}!";
   els.messengerBetaEnabled.checked = !!s.messengerBetaEnabled;
   els.messengerSendTime.value = s.messengerSendTime || s.timelineSendTime || s.sendTime || "09:00";
-  els.messengerMessageTemplate.value = s.messengerMessageTemplate || s.timelineMessageTemplate || s.messageTemplate || "Happy Birthday {first_name}!";
+  els.messengerMessageTemplate.value = s.messengerMessageTemplate || "Happy Birthday! 🎉";
   els.dryRun.checked = !!s.dryRun;
   applyChannelVisibility();
 
@@ -151,7 +151,7 @@ function collectSettings() {
     timelineMessageTemplate: els.timelineMessageTemplate.value || "Happy Birthday {first_name}!",
     messengerBetaEnabled: !!els.messengerBetaEnabled.checked,
     messengerSendTime: els.messengerSendTime.value || "09:00",
-    messengerMessageTemplate: els.messengerMessageTemplate.value || "Happy Birthday {first_name}!",
+    messengerMessageTemplate: els.messengerMessageTemplate.value || "Happy Birthday! 🎉",
     dryRun: els.dryRun.checked
   };
 }

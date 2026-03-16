@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Facebook Birthday Auto Poster",
   "short_name": "FB Birthday Poster",
-  "version": "2.3.5",
+  "version": "2.3.6",
   "description": "Standalone Facebook birthday poster using Facebook internal GraphQL.",
   "action": {
     "default_title": "Birthday Messaging",

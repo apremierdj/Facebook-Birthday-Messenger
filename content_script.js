@@ -97,6 +97,61 @@ function clickContinueIfPresent() {
   return false;
 }
 
+function cleanMessengerLabel(value) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+(?:[-(|]).*$/g, "")
+    .trim();
+  if (!text) return "";
+
+  const banned = new Set([
+    "messenger",
+    "facebook",
+    "meta",
+    "chats",
+    "chat",
+    "message",
+    "messages"
+  ]);
+  if (banned.has(text.toLowerCase())) return "";
+  return text;
+}
+
+function getMessengerThreadLabel() {
+  const main = document.querySelector('div[role="main"]') || document.body;
+  const selectors = [
+    'div[role="main"] h1',
+    'div[role="main"] h2',
+    'div[role="main"] h3',
+    'div[role="main"] [role="banner"] h1',
+    'div[role="main"] [role="banner"] h2',
+    'div[role="main"] a[role="link"] span[dir="auto"]'
+  ];
+
+  for (const sel of selectors) {
+    const nodes = Array.from(document.querySelectorAll(sel)).filter(isVisible);
+    for (const node of nodes) {
+      const label = cleanMessengerLabel(node.innerText || node.textContent || "");
+      if (label) return label;
+    }
+  }
+
+  if (main) {
+    const autoTextNodes = Array.from(main.querySelectorAll('span[dir="auto"], div[dir="auto"]')).filter(isVisible);
+    for (const node of autoTextNodes) {
+      const label = cleanMessengerLabel(node.innerText || node.textContent || "");
+      if (label && !/^\d+$/.test(label)) return label;
+    }
+  }
+
+  const title = cleanMessengerLabel(
+    document.title
+      .replace(/\s*\|\s*Messenger\s*$/i, "")
+      .replace(/^Messenger\s*$/i, "")
+  );
+  return title;
+}
+
 async function findMessageComposer(timeoutMs = 30000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -298,6 +353,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({
           ok: !!sent,
           detail: sent ? "message_send_triggered" : "send_trigger_not_found",
+          href: location.href
+        });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e), href: location.href });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type === "bm_dm_prepare") {
+    (async () => {
+      try {
+        const composer = await findMessageComposer(Number(msg.timeoutMs) || 30000);
+        if (!composer) throw new Error("Could not find Messenger composer");
+
+        const recipientName = getMessengerThreadLabel();
+        sendResponse({
+          ok: true,
+          recipientName: recipientName || null,
           href: location.href
         });
       } catch (e) {

@@ -4,7 +4,7 @@ const DEFAULT_SETTINGS = {
   timelineMessageTemplate: "Happy Birthday {first_name} 🎉",
   messengerBetaEnabled: false,    // when true, sends private Messenger DMs instead of timeline posts
   messengerSendTime: "09:00",
-  messengerMessageTemplate: "Happy Birthday {first_name} 🎉",
+  messengerMessageTemplate: "Happy Birthday! 🎉",
   dryRun: false                   // if true, logs actions but does not post
 };
 
@@ -54,12 +54,17 @@ async function getSettings() {
   if (!stored.timelineMessageTemplate && stored.messageTemplate) merged.timelineMessageTemplate = stored.messageTemplate;
   if (!stored.messengerSendTime && stored.sendTime) merged.messengerSendTime = stored.sendTime;
   if (!stored.messengerMessageTemplate && stored.messageTemplate) merged.messengerMessageTemplate = stored.messageTemplate;
+  merged.messengerMessageTemplate = sanitizeMessengerTemplate(merged.messengerMessageTemplate);
   return merged;
 }
 
 async function setSettings(next) {
-  await chrome.storage.local.set({ [STORAGE_KEYS.settings]: next });
-  await ensureScheduledAlarms(next, "save");
+  const sanitized = {
+    ...next,
+    messengerMessageTemplate: sanitizeMessengerTemplate(next?.messengerMessageTemplate)
+  };
+  await chrome.storage.local.set({ [STORAGE_KEYS.settings]: sanitized });
+  await ensureScheduledAlarms(sanitized, "save");
 }
 
 async function appendLog(level, message, extra = null) {
@@ -245,7 +250,7 @@ function createLoginRequiredError() {
   return err;
 }
 
-async function fetchAuthTokens() {
+async function fetchAuthTokens(runCtx = null) {
   // User id is most reliably the c_user cookie.
   const userId = await getFbUserIdFromCookie();
   if (!userId) {
@@ -253,7 +258,7 @@ async function fetchAuthTokens() {
   }
 
   // fb_dtsg (and often lsd) are safest to read from a live facebook.com tab via content script.
-  const tokenRes = await getFbTokensFromOpenTab();
+  const tokenRes = await getFbTokensFromOpenTab(runCtx);
   const fb_dtsg = tokenRes?.fb_dtsg || null;
   const lsd = tokenRes?.lsd || null;
 
@@ -267,10 +272,8 @@ async function fetchAuthTokens() {
 
   return { fb_dtsg, lsd, userId };
 }
-
-
-async function getFbTokensFromOpenTab() {
-  const active = await ensureFacebookTab();
+async function getFbTokensFromOpenTab(runCtx = null) {
+  const active = await ensureFacebookTab(runCtx);
   if (!active?.id) return null;
 
   async function ask(tabId) {
@@ -293,8 +296,6 @@ async function getFbTokensFromOpenTab() {
 
   return null;
 }
-
-
 async function ensureFbContentScript(tabId) {
   try {
     // ping first
@@ -321,8 +322,6 @@ async function getActiveFacebookTab() {
   if (!tabs || tabs.length === 0) return null;
   return tabs.find(t => t.active && t.lastFocusedWindow) || tabs.find(t => t.active) || tabs[0] || null;
 }
-
-
 function waitForTabComplete(tabId) {
   return new Promise((resolve) => {
     chrome.tabs.get(tabId, (tab) => {
@@ -340,10 +339,7 @@ function waitForTabComplete(tabId) {
     });
   });
 }
-
-
-
-async function ensureFacebookTab() {
+async function ensureFacebookTab(runCtx = null) {
   const tabs = await chrome.tabs.query({ url: "*://*.facebook.com/*" });
   let fbTab;
 
@@ -353,6 +349,9 @@ async function ensureFacebookTab() {
       url: "https://www.facebook.com/",
       active: false
     });
+    if (runCtx?.openedFacebookTabIds && fbTab?.id) {
+      runCtx.openedFacebookTabIds.add(fbTab.id);
+    }
     await waitForTabComplete(fbTab.id);
   } else {
     fbTab = tabs[0];
@@ -364,11 +363,8 @@ async function ensureFacebookTab() {
 
   return fbTab;
 }
-
-
-
-async function facebookGraphqlViaTab({ userId, doc_id, variables, friendlyName }) {
-  const tab = await ensureFacebookTab();
+async function facebookGraphqlViaTab({ userId, doc_id, variables, friendlyName, runCtx = null }) {
+  const tab = await ensureFacebookTab(runCtx);
   if (!tab?.id) throw new Error("No Facebook tab found. Please open Facebook.com and log in, then try again.");
 
   await ensureFbContentScript(tab.id);
@@ -445,10 +441,10 @@ function computeJazoest(fb_dtsg) {
   return "2" + String(sum);
 }
 
-async function facebookGraphql({ fb_dtsg, lsd, userId, doc_id, variables, friendlyName }) {
+async function facebookGraphql({ fb_dtsg, lsd, userId, doc_id, variables, friendlyName, runCtx = null }) {
   // Prefer executing from a live facebook.com tab (more reliable: correct origin/referer)
   try {
-    return await facebookGraphqlViaTab({ userId, doc_id, variables, friendlyName });
+    return await facebookGraphqlViaTab({ userId, doc_id, variables, friendlyName, runCtx });
   } catch (e) {
     // Fall back to background fetch if tab execution fails (best-effort).
   }
@@ -500,13 +496,13 @@ function extractTodayBirthdays(data) {
   return out;
 }
 
-async function getTodaysBirthdays(tokensOverride = null) {
-  const tokens = tokensOverride || await fetchAuthTokens();
+async function getTodaysBirthdays(tokensOverride = null, runCtx = null) {
+  const tokens = tokensOverride || await fetchAuthTokens(runCtx);
   if (!tokens) throw createLoginRequiredError();
   const { fb_dtsg, lsd, userId } = tokens;
 
   const variables = { offset_month: -1, scale: 1 };
-  const res = await facebookGraphql({ fb_dtsg, lsd, userId, doc_id: DOC_IDS.birthdays, variables, friendlyName: "BirthdayCometRootQuery" });
+  const res = await facebookGraphql({ fb_dtsg, lsd, userId, doc_id: DOC_IDS.birthdays, variables, friendlyName: "BirthdayCometRootQuery", runCtx });
 
   // Primary: viewer.all_friends.edges (today’s birthdays)
   const todayEdges = res?.data?.viewer?.all_friends?.edges;
@@ -521,27 +517,55 @@ async function getTodaysBirthdays(tokensOverride = null) {
 
   return { userId, fb_dtsg, raw: res, birthdays: out };
 }
-
-
 function renderMessage(template, name, includeName) {
   const safeName = (name || "").trim();
   const firstName = safeName ? safeName.split(/\s+/)[0] : "";
 
   if (!includeName || !safeName) {
     return template
-      
       .replace(/\{first_name\}/g, firstName || '')
       .replace(/\s+/g, " ")
       .trim();
   }
 
   return template
-    
     .replace(/\{first_name\}/g, firstName || '');
 }
 
+function sanitizeMessengerTemplate(template) {
+  return String(template || DEFAULT_SETTINGS.messengerMessageTemplate)
+    .replace(/\{first_name\}/g, "")
+    .replace(/\s+/g, " ")
+    .trim() || DEFAULT_SETTINGS.messengerMessageTemplate;
+}
 
-async function postHappyBirthday({ fb_dtsg, lsd, userId, actorId, friendId, messageText }) {
+function normalizePersonName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function namesProbablyReferToSamePerson(expectedName, actualName) {
+  const expected = normalizePersonName(expectedName);
+  const actual = normalizePersonName(actualName);
+  if (!expected || !actual) return true;
+  if (expected === actual) return true;
+
+  const expectedParts = expected.split(" ").filter(Boolean);
+  const actualParts = actual.split(" ").filter(Boolean);
+  if (!expectedParts.length || !actualParts.length) return true;
+
+  const expectedFirst = expectedParts[0];
+  const actualFirst = actualParts[0];
+  if (expectedFirst === actualFirst) return true;
+
+  return expectedParts.some((part) => actualParts.includes(part));
+}
+async function postHappyBirthday({ fb_dtsg, lsd, userId, actorId, friendId, messageText, runCtx = null }) {
   const variables = {
     input: {
       composer_entry_point: "inline_composer",
@@ -556,113 +580,130 @@ async function postHappyBirthday({ fb_dtsg, lsd, userId, actorId, friendId, mess
     }
   };
 
-  const res = await facebookGraphql({ fb_dtsg, lsd, userId, doc_id: DOC_IDS.post, variables, friendlyName: "ComposerStoryCreateMutation" });
+  const res = await facebookGraphql({ fb_dtsg, lsd, userId, doc_id: DOC_IDS.post, variables, friendlyName: "ComposerStoryCreateMutation", runCtx });
   return res;
 }
 
-async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
-  const settings = await getSettings();
-  const wantsTimeline = !!settings.enabled && mode !== "messenger";
-  const wantsMessenger = !!settings.messengerBetaEnabled && mode !== "timeline";
-  if (!wantsTimeline && !wantsMessenger) {
-    await appendLog("info", "All delivery modes are disabled. Skipping run.");
-    return { ok: true, skipped: true };
+async function closeRunOpenedFacebookTabs(runCtx) {
+  if (!runCtx?.openedFacebookTabIds || runCtx.openedFacebookTabIds.size === 0) return;
+  const tabIds = Array.from(runCtx.openedFacebookTabIds);
+  runCtx.openedFacebookTabIds.clear();
+  for (const tabId of tabIds) {
+    try {
+      await chrome.tabs.remove(tabId);
+    } catch (_) {}
   }
-
-  await appendLog("info", `${manual ? "Manual" : "Scheduled"} run started.`);
-  if (wantsTimeline) {
-    await appendLog("info", "Timeline posting is enabled.");
-  }
-  if (wantsMessenger) {
-    await appendLog("info", "Messenger Beta mode enabled: sending private messages via Messenger threads.");
-  }
-
-  let tokens;
-  try {
-    tokens = await fetchAuthTokens();
-    if (!tokens) {
-      return { ok: false, error: FB_LOGIN_REQUIRED_MESSAGE };
-    }
-    await appendLog("info", "Facebook tokens acquired.");
-  } catch (err) {
-    await appendLog("error", "Failed to acquire Facebook tokens.", { error: String(err) });
-    return { ok: false, error: String(err) };
-  }
-
-  let birthdayData;
-  try {
-    birthdayData = await getTodaysBirthdays(tokens);
-    await appendLog("info", `Fetched today's birthdays: ${birthdayData.birthdays.length}`);
-  } catch (err) {
-    const msg = err?.code === "FB_NOT_LOGGED_IN" ? FB_LOGIN_REQUIRED_MESSAGE : String(err);
-    await appendLog("error", "Failed to fetch birthdays.", { error: msg });
-    return { ok: false, error: msg };
-  }
-
-  const actorId = birthdayData.userId;
-  const fb_dtsg = tokens.fb_dtsg; // use latest
-
-  let postedTimeline = 0;
-  let sentMessenger = 0;
-  for (const b of birthdayData.birthdays) {
-    const alreadyTimeline = wantsTimeline ? await wasSentToday(b.id, "timeline") : true;
-    const alreadyMessenger = wantsMessenger ? await wasSentToday(b.id, "messenger") : true;
-    if (alreadyTimeline && alreadyMessenger) {
-      await appendLog("info", `Already completed selected actions today for ${b.name || b.id}. Skipping.`, { friendId: b.id });
-      continue;
-    }
-
-    const timelineMessage = renderMessage(settings.timelineMessageTemplate, b.name, true);
-    const messengerMessage = renderMessage(settings.messengerMessageTemplate, b.name, true);
-
-    if (settings.dryRun) {
-      if (wantsTimeline && !alreadyTimeline) {
-        await appendLog("info", `DRY RUN: would post "${timelineMessage}" to ${b.name || b.id}`, { friendId: b.id });
-      }
-      if (wantsMessenger && !alreadyMessenger) {
-        await appendLog("info", `DRY RUN: would send private message "${messengerMessage}" to ${b.name || b.id}`, { friendId: b.id });
-      }
-      continue;
-    }
-
-    if (wantsTimeline && !alreadyTimeline) {
-      try {
-        const res = await postHappyBirthday({ fb_dtsg, lsd: tokens.lsd, userId: tokens.userId, actorId, friendId: b.id, messageText: timelineMessage });
-        await markSent(b.id, "timeline");
-        await appendLog("info", `Posted to ${b.name || b.id}.`, {
-          friendId: b.id,
-          status: res?.errors ? "posted_with_graphql_errors" : "posted"
-        });
-        postedTimeline++;
-      } catch (err) {
-        await appendLog("error", `Failed to post to ${b.name || b.id}.`, { friendId: b.id, error: String(err) });
-      }
-    }
-
-    if (wantsMessenger && !alreadyMessenger) {
-      try {
-        const dmRes = await sendPrivateMessage({
-          friendId: b.id,
-          messageText: messengerMessage
-        });
-        await markSent(b.id, "messenger");
-        await appendLog("info", `Sent private message to ${b.name || b.id}.`, {
-          friendId: b.id,
-          status: dmRes?.detail || "dm_sent"
-        });
-        sentMessenger++;
-      } catch (err) {
-        await appendLog("error", `Failed to send private message to ${b.name || b.id}.`, { friendId: b.id, error: String(err) });
-      }
-    }
-    await sleep(DM_DELAY_MS);
-  }
-
-  await appendLog("info", `Run finished. Timeline posted: ${postedTimeline}. Private messages sent: ${sentMessenger}.`);
-  return { ok: true, posted: postedTimeline, messaged: sentMessenger };
 }
 
-async function sendPrivateMessage({ friendId, messageText }) {
+async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
+  const runCtx = { openedFacebookTabIds: new Set() };
+  try {
+    const settings = await getSettings();
+    const wantsTimeline = !!settings.enabled && mode !== "messenger";
+    const wantsMessenger = !!settings.messengerBetaEnabled && mode !== "timeline";
+    if (!wantsTimeline && !wantsMessenger) {
+      await appendLog("info", "All delivery modes are disabled. Skipping run.");
+      return { ok: true, skipped: true };
+    }
+
+    await appendLog("info", `${manual ? "Manual" : "Scheduled"} run started.`);
+    if (wantsTimeline) {
+      await appendLog("info", "Timeline posting is enabled.");
+    }
+    if (wantsMessenger) {
+      await appendLog("info", "Messenger Beta mode enabled: sending private messages via Messenger threads.");
+    }
+
+    let tokens;
+    try {
+      tokens = await fetchAuthTokens(runCtx);
+      if (!tokens) {
+        return { ok: false, error: FB_LOGIN_REQUIRED_MESSAGE };
+      }
+      await appendLog("info", "Facebook tokens acquired.");
+    } catch (err) {
+      await appendLog("error", "Failed to acquire Facebook tokens.", { error: String(err) });
+      return { ok: false, error: String(err) };
+    }
+
+    let birthdayData;
+    try {
+      birthdayData = await getTodaysBirthdays(tokens, runCtx);
+      await appendLog("info", `Fetched today's birthdays: ${birthdayData.birthdays.length}`);
+    } catch (err) {
+      const msg = err?.code === "FB_NOT_LOGGED_IN" ? FB_LOGIN_REQUIRED_MESSAGE : String(err);
+      await appendLog("error", "Failed to fetch birthdays.", { error: msg });
+      return { ok: false, error: msg };
+    }
+
+    const actorId = birthdayData.userId;
+    const fb_dtsg = tokens.fb_dtsg; // use latest
+
+    let postedTimeline = 0;
+    let sentMessenger = 0;
+    for (const b of birthdayData.birthdays) {
+      const alreadyTimeline = wantsTimeline ? await wasSentToday(b.id, "timeline") : true;
+      const alreadyMessenger = wantsMessenger ? await wasSentToday(b.id, "messenger") : true;
+      if (alreadyTimeline && alreadyMessenger) {
+        await appendLog("info", `Already completed selected actions today for ${b.name || b.id}. Skipping.`, { friendId: b.id });
+        continue;
+      }
+
+      const timelineMessage = renderMessage(settings.timelineMessageTemplate, b.name, true);
+      const messengerMessage = renderMessage(settings.messengerMessageTemplate, b.name, true);
+
+      if (settings.dryRun) {
+        if (wantsTimeline && !alreadyTimeline) {
+          await appendLog("info", `DRY RUN: would post "${timelineMessage}" to ${b.name || b.id}`, { friendId: b.id });
+        }
+        if (wantsMessenger && !alreadyMessenger) {
+          await appendLog("info", `DRY RUN: would send private message "${messengerMessage}" to ${b.name || b.id}`, { friendId: b.id });
+        }
+        continue;
+      }
+
+      if (wantsTimeline && !alreadyTimeline) {
+        try {
+          const res = await postHappyBirthday({ fb_dtsg, lsd: tokens.lsd, userId: tokens.userId, actorId, friendId: b.id, messageText: timelineMessage, runCtx });
+          await markSent(b.id, "timeline");
+          await appendLog("info", `Posted to ${b.name || b.id}.`, {
+            friendId: b.id,
+            status: res?.errors ? "posted_with_graphql_errors" : "posted"
+          });
+          postedTimeline++;
+        } catch (err) {
+          await appendLog("error", `Failed to post to ${b.name || b.id}.`, { friendId: b.id, error: String(err) });
+        }
+      }
+
+      if (wantsMessenger && !alreadyMessenger) {
+        try {
+          const dmRes = await sendPrivateMessage({
+            friendId: b.id,
+            expectedName: b.name,
+            messageTemplate: settings.messengerMessageTemplate
+          });
+          await markSent(b.id, "messenger");
+          await appendLog("info", `Sent private message to ${b.name || b.id}.`, {
+            friendId: b.id,
+            status: dmRes?.detail || "dm_sent"
+          });
+          sentMessenger++;
+        } catch (err) {
+          await appendLog("error", `Failed to send private message to ${b.name || b.id}.`, { friendId: b.id, error: String(err) });
+        }
+      }
+      await sleep(DM_DELAY_MS);
+    }
+
+    await appendLog("info", `Run finished. Timeline posted: ${postedTimeline}. Private messages sent: ${sentMessenger}.`);
+    return { ok: true, posted: postedTimeline, messaged: sentMessenger };
+  } finally {
+    await closeRunOpenedFacebookTabs(runCtx);
+  }
+}
+
+async function sendPrivateMessage({ friendId, expectedName, messageTemplate }) {
   const url = `https://www.facebook.com/messages/t/${encodeURIComponent(String(friendId))}`;
   const tab = await chrome.tabs.create({ url, active: false });
   if (!tab?.id) throw new Error("Could not open Messenger thread tab");
@@ -670,6 +711,27 @@ async function sendPrivateMessage({ friendId, messageText }) {
   try {
     await waitForTabComplete(tab.id);
     await ensureFbContentScript(tab.id);
+
+    const prep = await chrome.tabs.sendMessage(tab.id, {
+      type: "bm_dm_prepare",
+      timeoutMs: 30000
+    });
+    if (!prep?.ok) {
+      throw new Error(prep?.error || "Messenger thread inspection failed");
+    }
+
+    const recipientName = String(prep.recipientName || expectedName || "").trim();
+    if (!recipientName) {
+      throw new Error("Could not determine Messenger recipient name");
+    }
+    if (!namesProbablyReferToSamePerson(expectedName, recipientName)) {
+      throw new Error(`Messenger opened a different conversation ("${recipientName}") than expected ("${expectedName || friendId}")`);
+    }
+
+    const messageText = renderMessage(messageTemplate, recipientName, true);
+    if (!messageText) {
+      throw new Error("Rendered Messenger message is empty");
+    }
 
     const res = await chrome.tabs.sendMessage(tab.id, {
       type: "bm_dm_send",
@@ -802,8 +864,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return;
       }
       if (msg?.type === "test_fetch_birthdays") {
-        const data = await getTodaysBirthdays();
-        sendResponse({ ok: true, count: data.birthdays.length, birthdays: data.birthdays.slice(0, 20) });
+        const runCtx = { openedFacebookTabIds: new Set() };
+        try {
+          const data = await getTodaysBirthdays(null, runCtx);
+          sendResponse({ ok: true, count: data.birthdays.length, birthdays: data.birthdays.slice(0, 20) });
+        } finally {
+          await closeRunOpenedFacebookTabs(runCtx);
+        }
         return;
       }
 
