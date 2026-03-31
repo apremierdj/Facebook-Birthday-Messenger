@@ -132,10 +132,10 @@ async function loadState() {
 
   const s = res.settings || {};
   els.enabled.checked = !!s.enabled;
-  els.timelineSendTime.value = s.timelineSendTime || s.sendTime || "09:00";
+  els.timelineSendTime.value = s.timelineSendTime || s.sendTime || "08:05";
   els.timelineMessageTemplate.value = s.timelineMessageTemplate || s.messageTemplate || "Happy Birthday {first_name}!";
   els.messengerBetaEnabled.checked = !!s.messengerBetaEnabled;
-  els.messengerSendTime.value = s.messengerSendTime || s.timelineSendTime || s.sendTime || "09:00";
+  els.messengerSendTime.value = s.messengerSendTime || s.timelineSendTime || s.sendTime || "08:30";
   els.messengerMessageTemplate.value = s.messengerMessageTemplate || "Happy Birthday 🎉 Hope your day is filled with fun, good vibes, and smiles!";
   els.dryRun.checked = !!s.dryRun;
   applyChannelVisibility();
@@ -147,10 +147,10 @@ async function loadState() {
 function collectSettings() {
   return {
     enabled: els.enabled.checked,
-    timelineSendTime: els.timelineSendTime.value || "09:00",
+    timelineSendTime: els.timelineSendTime.value || "08:05",
     timelineMessageTemplate: els.timelineMessageTemplate.value || "Happy Birthday {first_name}!",
     messengerBetaEnabled: !!els.messengerBetaEnabled.checked,
-    messengerSendTime: els.messengerSendTime.value || "09:00",
+    messengerSendTime: els.messengerSendTime.value || "08:30",
     messengerMessageTemplate: els.messengerMessageTemplate.value || "Happy Birthday 🎉 Hope your day is filled with fun, good vibes, and smiles!",
     dryRun: els.dryRun.checked
   };

@@ -1,9 +1,9 @@
 const DEFAULT_SETTINGS = {
   enabled: true,                  // timeline posting toggle
-  timelineSendTime: "09:00",      // local computer time (HH:MM, 24h)
+  timelineSendTime: "08:05",      // local computer time (HH:MM, 24h)
   timelineMessageTemplate: "Happy Birthday {first_name} 🎉",
   messengerBetaEnabled: false,    // when true, sends private Messenger DMs instead of timeline posts
-  messengerSendTime: "09:00",
+  messengerSendTime: "08:30",
   messengerMessageTemplate: "Happy Birthday 🎉 Hope your day is filled with fun, good vibes, and smiles!",
   dryRun: false                   // if true, logs actions but does not post
 };
