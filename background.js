@@ -24,7 +24,8 @@ const SENT_DAYS_TO_KEEP = 10;
 const FB_LOGIN_REQUIRED_MESSAGE = "Facebook does not appear to be logged in. Please log into your Facebook account before continueing.";
 const LOG_MESSAGE_MAX_CHARS = 500;
 const LOG_EXTRA_MAX_CHARS = 4000;
-const DM_DELAY_MS = 2500;
+const INTER_RECIPIENT_DELAY_MIN_MS = 60 * 1000;
+const INTER_RECIPIENT_DELAY_MAX_MS = 3 * 60 * 1000;
 const ALARM_TIMELINE = "bm_daily_timeline";
 const ALARM_MESSENGER = "bm_daily_messenger";
 
@@ -43,6 +44,12 @@ function nowIso() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function randomInt(min, max) {
+  const lo = Math.ceil(min);
+  const hi = Math.floor(max);
+  return Math.floor(Math.random() * (hi - lo + 1)) + lo;
 }
 
 async function getSettings() {
@@ -641,7 +648,8 @@ async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
 
     let postedTimeline = 0;
     let sentMessenger = 0;
-    for (const b of birthdayData.birthdays) {
+    for (let i = 0; i < birthdayData.birthdays.length; i++) {
+      const b = birthdayData.birthdays[i];
       const alreadyTimeline = wantsTimeline ? await wasSentToday(b.id, "timeline") : true;
       const alreadyMessenger = wantsMessenger ? await wasSentToday(b.id, "messenger") : true;
       if (alreadyTimeline && alreadyMessenger) {
@@ -693,7 +701,15 @@ async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
           await appendLog("error", `Failed to send private message to ${b.name || b.id}.`, { friendId: b.id, error: String(err) });
         }
       }
-      await sleep(DM_DELAY_MS);
+
+      const hasMoreRecipients = i < birthdayData.birthdays.length - 1;
+      const attemptedDelivery = (!alreadyTimeline && wantsTimeline) || (!alreadyMessenger && wantsMessenger);
+      if (hasMoreRecipients && attemptedDelivery) {
+        const delayMs = randomInt(INTER_RECIPIENT_DELAY_MIN_MS, INTER_RECIPIENT_DELAY_MAX_MS);
+        const delaySeconds = Math.round(delayMs / 1000);
+        await appendLog("info", `Waiting ${delaySeconds} seconds before the next birthday recipient.`, { friendId: b.id });
+        await sleep(delayMs);
+      }
     }
 
     await appendLog("info", `Run finished. Timeline posted: ${postedTimeline}. Private messages sent: ${sentMessenger}.`);
