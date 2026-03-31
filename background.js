@@ -4,7 +4,7 @@ const DEFAULT_SETTINGS = {
   timelineMessageTemplate: "Happy Birthday {first_name} 🎉",
   messengerBetaEnabled: false,    // when true, sends private Messenger DMs instead of timeline posts
   messengerSendTime: "09:00",
-  messengerMessageTemplate: "Happy Birthday! 🎉",
+  messengerMessageTemplate: "Happy Birthday 🎉 Hope your day is filled with fun, good vibes, and smiles!",
   dryRun: false                   // if true, logs actions but does not post
 };
 
