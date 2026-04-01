@@ -26,6 +26,7 @@ const LOG_MESSAGE_MAX_CHARS = 500;
 const LOG_EXTRA_MAX_CHARS = 4000;
 const INTER_RECIPIENT_DELAY_MIN_MS = 60 * 1000;
 const INTER_RECIPIENT_DELAY_MAX_MS = 3 * 60 * 1000;
+const FACEBOOK_TAB_LOAD_TIMEOUT_MS = 20000;
 const ALARM_TIMELINE = "bm_daily_timeline";
 const ALARM_MESSENGER = "bm_daily_messenger";
 
@@ -329,44 +330,58 @@ async function getActiveFacebookTab() {
   if (!tabs || tabs.length === 0) return null;
   return tabs.find(t => t.active && t.lastFocusedWindow) || tabs.find(t => t.active) || tabs[0] || null;
 }
-function waitForTabComplete(tabId) {
+function waitForTabComplete(tabId, timeoutMs = FACEBOOK_TAB_LOAD_TIMEOUT_MS) {
   return new Promise((resolve) => {
-    chrome.tabs.get(tabId, (tab) => {
-      if (!tab || tab.status === "complete") {
-        resolve();
-        return;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    };
+
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        finish();
       }
-      function listener(updatedTabId, changeInfo) {
-        if (updatedTabId === tabId && changeInfo.status === "complete") {
-          chrome.tabs.onUpdated.removeListener(listener);
-          resolve();
-        }
+    };
+
+    const timeoutId = setTimeout(() => {
+      finish();
+    }, timeoutMs);
+
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError || !tab || tab.status === "complete") {
+        finish();
+        return;
       }
       chrome.tabs.onUpdated.addListener(listener);
     });
   });
 }
+
+function isPreferredFacebookTab(tab) {
+  const url = String(tab?.url || "");
+  return /^https:\/\/(www\.)?facebook\.com\/($|home\.php|friends\/?$)/i.test(url);
+}
+
 async function ensureFacebookTab(runCtx = null) {
   const tabs = await chrome.tabs.query({ url: "*://*.facebook.com/*" });
-  let fbTab;
+  const readyPreferredTab = tabs.find((tab) => tab.status === "complete" && isPreferredFacebookTab(tab));
+  if (readyPreferredTab) return readyPreferredTab;
 
-  if (tabs.length === 0) {
-    console.log("Facebook tab not detected. Opening Facebook tab. Waiting to complete page load before continuing.");
-    fbTab = await chrome.tabs.create({
-      url: "https://www.facebook.com/",
-      active: false
-    });
-    if (runCtx?.openedFacebookTabIds && fbTab?.id) {
-      runCtx.openedFacebookTabIds.add(fbTab.id);
-    }
-    await waitForTabComplete(fbTab.id);
-  } else {
-    fbTab = tabs[0];
-    if (fbTab.status !== "complete") {
-      console.log("Facebook tab detected but still loading. Waiting to complete page load before continuing.");
-      await waitForTabComplete(fbTab.id);
-    }
+  const readyAnyTab = tabs.find((tab) => tab.status === "complete");
+  if (readyAnyTab) return readyAnyTab;
+
+  const fbTab = await chrome.tabs.create({
+    url: "https://www.facebook.com/",
+    active: false
+  });
+  if (runCtx?.openedFacebookTabIds && fbTab?.id) {
+    runCtx.openedFacebookTabIds.add(fbTab.id);
   }
+  if (fbTab?.id) await waitForTabComplete(fbTab.id);
 
   return fbTab;
 }
