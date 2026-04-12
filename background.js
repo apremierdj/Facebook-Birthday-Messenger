@@ -72,7 +72,7 @@ async function getSettings() {
 
 async function setSettings(next) {
   await chrome.storage.local.set({ [STORAGE_KEYS.settings]: next });
-  await ensureScheduledAlarms(sanitized, "save");
+  await ensureScheduledAlarms(next, "save");
 }
 
 async function appendLog(level, message, extra = null) {
