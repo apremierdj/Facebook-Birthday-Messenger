@@ -41,9 +41,9 @@
           </div>
 
           <div class="row">
-            <label class="label" for="timelineMessageTemplate">Timeline message template</label>
-            <textarea id="timelineMessageTemplate" class="textarea" rows="3" placeholder="Happy Birthday {first_name}!"></textarea>
-            <div class="hint">Use <b>{first_name}</b> to insert the friend’s name (when available).</div>
+            <label class="label" for="timelineMessageTemplates">Timeline message templates</label>
+            <textarea id="timelineMessageTemplates" class="textarea" rows="4" placeholder="Happy Birthday {first_name}! ||| HBD {first_name}! ||| ..."></textarea>
+            <div class="hint">Separate with <b>|||</b>. One is chosen randomly per friend so posts aren’t identical. Use <b>{first_name}</b> to insert the friend’s name.</div>
           </div>
         </div>
       </div>
@@ -62,9 +62,9 @@
             <input id="messengerSendTime" type="time" class="input" />
           </div>
           <div class="row">
-            <label class="label" for="messengerMessageTemplate">Messenger message template</label>
-            <textarea id="messengerMessageTemplate" class="textarea" rows="3" placeholder="Happy Birthday 🎉 Hope your day is filled with fun, good vibes, and smiles!"></textarea>
-            <div class="hint">Messenger templates no longer support <b>{first_name}</b>. Beta is opt-in and sends private messages automatically.</div>
+            <label class="label" for="messengerMessageTemplates">Messenger message templates</label>
+            <textarea id="messengerMessageTemplates" class="textarea" rows="4" placeholder="Happy Birthday! 🎉 ||| HBD! Hope it's a great one! ||| ..."></textarea>
+            <div class="hint">Separate with <b>|||</b>. One is chosen randomly per friend so messages aren't identical.</div>
           </div>
         </div>
       </div>

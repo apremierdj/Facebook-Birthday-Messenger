@@ -1,10 +1,10 @@
 const DEFAULT_SETTINGS = {
   enabled: true,                  // timeline posting toggle
   timelineSendTime: "08:05",      // local computer time (HH:MM, 24h)
-  timelineMessageTemplate: "Happy Birthday {first_name} 🎉",
+  timelineMessageTemplates: "Happy Birthday {first_name} 🎉|||Happy Birthday {first_name}! Hope you have an amazing day! 🎂|||Wishing you the happiest of birthdays {first_name}! 🥳|||HBD {first_name}! Hope it's a great one! 🎉|||Hey {first_name}! Happy Birthday! Enjoy your special day! 🎈|||Happy Birthday {first_name}! Hope this year brings you nothing but good things! 🙌",
   messengerBetaEnabled: false,    // when true, sends private Messenger DMs instead of timeline posts
   messengerSendTime: "08:30",
-  messengerMessageTemplate: "Happy Birthday 🎉 Hope your day is filled with fun, good vibes, and smiles!",
+  messengerMessageTemplates: "Happy Birthday 🎉 Hope your day is filled with fun, good vibes, and smiles!|||Happy Birthday! Wishing you the best day ever! 🎂|||Happy Birthday! Hope your day is absolutely incredible! 🥳|||Happy Birthday! Have a wonderful day! Hope you enjoy it! 🎈|||Hey! Happy Birthday! Hope it's a good one! 🎉|||Happy Birthday! Wishing you all the best today and always! 🙌",
   dryRun: false                   // if true, logs actions but does not post
 };
 
@@ -24,8 +24,11 @@ const SENT_DAYS_TO_KEEP = 10;
 const FB_LOGIN_REQUIRED_MESSAGE = "Facebook does not appear to be logged in. Please log into your Facebook account before continueing.";
 const LOG_MESSAGE_MAX_CHARS = 500;
 const LOG_EXTRA_MAX_CHARS = 4000;
-const INTER_RECIPIENT_DELAY_MIN_MS = 60 * 1000;
-const INTER_RECIPIENT_DELAY_MAX_MS = 3 * 60 * 1000;
+const INTER_RECIPIENT_DELAY_MIN_MS = 5 * 60 * 1000;      // 5 minutes
+const INTER_RECIPIENT_DELAY_MAX_MS = 20 * 60 * 1000;     // 20 minutes
+const PRE_ACTION_DELAY_MIN_MS = 3 * 1000;                // 3 seconds
+const PRE_ACTION_DELAY_MAX_MS = 15 * 1000;               // 15 seconds
+const SCHEDULE_JITTER_MINUTES = 30;                       // +/- 30 min jitter on daily schedule
 const FACEBOOK_TAB_LOAD_TIMEOUT_MS = 20000;
 const ALARM_TIMELINE = "bm_daily_timeline";
 const ALARM_MESSENGER = "bm_daily_messenger";
@@ -59,19 +62,16 @@ async function getSettings() {
   const merged = { ...DEFAULT_SETTINGS, ...stored };
   // Backward compatibility with previous single-template/single-time schema.
   if (!stored.timelineSendTime && stored.sendTime) merged.timelineSendTime = stored.sendTime;
-  if (!stored.timelineMessageTemplate && stored.messageTemplate) merged.timelineMessageTemplate = stored.messageTemplate;
+  if (!stored.timelineMessageTemplates && stored.timelineMessageTemplate) merged.timelineMessageTemplates = stored.timelineMessageTemplate;
+  if (!stored.timelineMessageTemplates && stored.messageTemplate) merged.timelineMessageTemplates = stored.messageTemplate;
   if (!stored.messengerSendTime && stored.sendTime) merged.messengerSendTime = stored.sendTime;
-  if (!stored.messengerMessageTemplate && stored.messageTemplate) merged.messengerMessageTemplate = stored.messageTemplate;
-  merged.messengerMessageTemplate = sanitizeMessengerTemplate(merged.messengerMessageTemplate);
+  if (!stored.messengerMessageTemplates && stored.messengerMessageTemplate) merged.messengerMessageTemplates = stored.messengerMessageTemplate;
+  if (!stored.messengerMessageTemplates && stored.messageTemplate) merged.messengerMessageTemplates = stored.messageTemplate;
   return merged;
 }
 
 async function setSettings(next) {
-  const sanitized = {
-    ...next,
-    messengerMessageTemplate: sanitizeMessengerTemplate(next?.messengerMessageTemplate)
-  };
-  await chrome.storage.local.set({ [STORAGE_KEYS.settings]: sanitized });
+  await chrome.storage.local.set({ [STORAGE_KEYS.settings]: next });
   await ensureScheduledAlarms(sanitized, "save");
 }
 
@@ -539,6 +539,12 @@ async function getTodaysBirthdays(tokensOverride = null, runCtx = null) {
 
   return { userId, fb_dtsg, raw: res, birthdays: out };
 }
+function pickRandomTemplate(templatesStr) {
+  const templates = String(templatesStr || "").split("|||").map(t => t.trim()).filter(Boolean);
+  if (!templates.length) return "";
+  return templates[Math.floor(Math.random() * templates.length)];
+}
+
 function renderMessage(template, name, includeName) {
   const safeName = (name || "").trim();
   const firstName = safeName ? safeName.split(/\s+/)[0] : "";
@@ -672,8 +678,10 @@ async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
         continue;
       }
 
-      const timelineMessage = renderMessage(settings.timelineMessageTemplate, b.name, true);
-      const messengerMessage = renderMessage(settings.messengerMessageTemplate, b.name, true);
+      const timelineTemplate = pickRandomTemplate(settings.timelineMessageTemplates);
+      const messengerTemplate = pickRandomTemplate(settings.messengerMessageTemplates);
+      const timelineMessage = renderMessage(timelineTemplate, b.name, true);
+      const messengerMessage = renderMessage(messengerTemplate, b.name, true);
 
       if (settings.dryRun) {
         if (wantsTimeline && !alreadyTimeline) {
@@ -687,6 +695,9 @@ async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
 
       if (wantsTimeline && !alreadyTimeline) {
         try {
+          // Random pause before posting — simulates a human reading/thinking before writing
+          const preDelay = randomInt(PRE_ACTION_DELAY_MIN_MS, PRE_ACTION_DELAY_MAX_MS);
+          await sleep(preDelay);
           const res = await postHappyBirthday({ fb_dtsg, lsd: tokens.lsd, userId: tokens.userId, actorId, friendId: b.id, messageText: timelineMessage, runCtx });
           await markSent(b.id, "timeline");
           await appendLog("info", `Posted to ${b.name || b.id}.`, {
@@ -701,10 +712,13 @@ async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
 
       if (wantsMessenger && !alreadyMessenger) {
         try {
+          // Random pause before DM — simulates browsing before opening a conversation
+          const preDelay = randomInt(PRE_ACTION_DELAY_MIN_MS, PRE_ACTION_DELAY_MAX_MS);
+          await sleep(preDelay);
           const dmRes = await sendPrivateMessage({
             friendId: b.id,
             expectedName: b.name,
-            messageTemplate: settings.messengerMessageTemplate
+            messageTemplate: messengerTemplate
           });
           await markSent(b.id, "messenger");
           await appendLog("info", `Sent private message to ${b.name || b.id}.`, {
@@ -797,6 +811,13 @@ async function ensureChannelAlarm(alarmName, sendTimeHHMM, enabled) {
   const now = new Date();
   const next = new Date(now);
   next.setHours(hh, mm, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+
+  // Add random jitter so the alarm doesn't fire at the exact same time every day.
+  // This makes the schedule look more human — nobody checks birthdays at exactly 08:05 daily.
+  const jitterMs = randomInt(-SCHEDULE_JITTER_MINUTES * 60 * 1000, SCHEDULE_JITTER_MINUTES * 60 * 1000);
+  next.setTime(next.getTime() + jitterMs);
+  // If jitter pushed it into the past, bump to tomorrow
   if (next <= now) next.setDate(next.getDate() + 1);
 
   chrome.alarms.create(alarmName, { when: next.getTime() });

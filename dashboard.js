@@ -1,10 +1,10 @@
 const els = {
   enabled: document.getElementById("enabled"),
   timelineSendTime: document.getElementById("timelineSendTime"),
-  timelineMessageTemplate: document.getElementById("timelineMessageTemplate"),
+  timelineMessageTemplates: document.getElementById("timelineMessageTemplates"),
   messengerBetaEnabled: document.getElementById("messengerBetaEnabled"),
   messengerSendTime: document.getElementById("messengerSendTime"),
-  messengerMessageTemplate: document.getElementById("messengerMessageTemplate"),
+  messengerMessageTemplates: document.getElementById("messengerMessageTemplates"),
   timelineFields: document.getElementById("timelineFields"),
   messengerFields: document.getElementById("messengerFields"),
   dryRun: document.getElementById("dryRun"),
@@ -133,10 +133,10 @@ async function loadState() {
   const s = res.settings || {};
   els.enabled.checked = !!s.enabled;
   els.timelineSendTime.value = s.timelineSendTime || s.sendTime || "08:05";
-  els.timelineMessageTemplate.value = s.timelineMessageTemplate || s.messageTemplate || "Happy Birthday {first_name}!";
+  els.timelineMessageTemplates.value = s.timelineMessageTemplates || s.timelineMessageTemplate || s.messageTemplate || "";
   els.messengerBetaEnabled.checked = !!s.messengerBetaEnabled;
   els.messengerSendTime.value = s.messengerSendTime || s.timelineSendTime || s.sendTime || "08:30";
-  els.messengerMessageTemplate.value = s.messengerMessageTemplate || "Happy Birthday 🎉 Hope your day is filled with fun, good vibes, and smiles!";
+  els.messengerMessageTemplates.value = s.messengerMessageTemplates || s.messengerMessageTemplate || "";
   els.dryRun.checked = !!s.dryRun;
   applyChannelVisibility();
 
@@ -148,10 +148,10 @@ function collectSettings() {
   return {
     enabled: els.enabled.checked,
     timelineSendTime: els.timelineSendTime.value || "08:05",
-    timelineMessageTemplate: els.timelineMessageTemplate.value || "Happy Birthday {first_name}!",
+    timelineMessageTemplates: els.timelineMessageTemplates.value || "",
     messengerBetaEnabled: !!els.messengerBetaEnabled.checked,
     messengerSendTime: els.messengerSendTime.value || "08:30",
-    messengerMessageTemplate: els.messengerMessageTemplate.value || "Happy Birthday 🎉 Hope your day is filled with fun, good vibes, and smiles!",
+    messengerMessageTemplates: els.messengerMessageTemplates.value || "",
     dryRun: els.dryRun.checked
   };
 }

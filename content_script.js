@@ -171,7 +171,7 @@ async function findMessageComposer(timeoutMs = 30000) {
   return null;
 }
 
-function setComposerText(composer, text) {
+async function setComposerText(composer, text) {
   composer.focus();
   const target = String(text || "");
   const normalized = (s) => String(s || "").replace(/\s+/g, " ").trim();
@@ -189,22 +189,47 @@ function setComposerText(composer, text) {
     document.execCommand("delete", false);
   } catch (_) {}
 
-  // Preferred: single paste event (closer to how Messenger handles text entry).
-  let inserted = false;
+  // Type character-by-character to simulate human typing behavior.
+  // Random delays between keystrokes (40-180ms) with occasional longer pauses.
+  let typed = false;
   try {
-    const dt = new DataTransfer();
-    dt.setData("text/plain", target);
-    const pasteEvt = new ClipboardEvent("paste", {
-      bubbles: true,
-      cancelable: true,
-      clipboardData: dt
-    });
-    composer.dispatchEvent(pasteEvt);
-    inserted = normalized(composer.textContent) === normalized(target);
+    for (let i = 0; i < target.length; i++) {
+      const char = target[i];
+      const inputEvent = new InputEvent("beforeinput", {
+        bubbles: true, cancelable: true, inputType: "insertText", data: char
+      });
+      composer.dispatchEvent(inputEvent);
+
+      // Use execCommand to insert text (triggers React/Messenger's internal handlers)
+      document.execCommand("insertText", false, char);
+
+      // Random typing delay: mostly 40-180ms, with ~15% chance of a longer "thinking" pause
+      let delay;
+      if (Math.random() < 0.15) {
+        delay = 200 + Math.floor(Math.random() * 400); // 200-600ms pause
+      } else {
+        delay = 40 + Math.floor(Math.random() * 140);  // 40-180ms normal typing
+      }
+      await sleep(delay);
+    }
+    typed = normalized(composer.textContent) === normalized(target);
   } catch (_) {}
 
-  // Fallback: direct text assignment with one plain input event (no data payload).
-  if (!inserted) {
+  // Fallback: paste if character-by-character typing didn't work
+  if (!typed) {
+    try {
+      const dt = new DataTransfer();
+      dt.setData("text/plain", target);
+      const pasteEvt = new ClipboardEvent("paste", {
+        bubbles: true, cancelable: true, clipboardData: dt
+      });
+      composer.dispatchEvent(pasteEvt);
+      typed = normalized(composer.textContent) === normalized(target);
+    } catch (_) {}
+  }
+
+  // Last resort fallback: direct text assignment
+  if (!typed) {
     composer.textContent = target;
     composer.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
   }
@@ -340,8 +365,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const composer = await findMessageComposer(Number(msg.timeoutMs) || 30000);
         if (!composer) throw new Error("Could not find Messenger composer");
 
-        setComposerText(composer, text);
-        await sleep(500);
+        await setComposerText(composer, text);
+        await sleep(500 + Math.floor(Math.random() * 1500)); // 0.5-2s pause after typing, like reviewing before sending
 
         let sent = tryClickSendButton();
         if (!sent) {
