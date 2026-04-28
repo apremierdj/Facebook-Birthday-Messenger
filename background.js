@@ -32,6 +32,8 @@ const SCHEDULE_JITTER_MINUTES = 30;                       // +/- 30 min jitter o
 const FACEBOOK_TAB_LOAD_TIMEOUT_MS = 20000;
 const ALARM_TIMELINE = "bm_daily_timeline";
 const ALARM_MESSENGER = "bm_daily_messenger";
+const ALARM_RESUME = "bm_resume_run";
+const STORAGE_PENDING_RUN = "bm_pending_run";
 
 let dashboardPorts = new Set();
 
@@ -623,7 +625,23 @@ async function closeRunOpenedFacebookTabs(runCtx) {
   }
 }
 
+async function clearPendingRun() {
+  try { await chrome.alarms.clear(ALARM_RESUME); } catch (_) {}
+  try { await chrome.storage.local.remove(STORAGE_PENDING_RUN); } catch (_) {}
+}
+
+async function savePendingRun(state, delayMs) {
+  // Persist state BEFORE creating the alarm — if Chrome kills the worker between calls,
+  // the alarm without state is harmless; state without an alarm would never resume.
+  await chrome.storage.local.set({ [STORAGE_PENDING_RUN]: state });
+  await chrome.alarms.clear(ALARM_RESUME);
+  chrome.alarms.create(ALARM_RESUME, { when: Date.now() + delayMs });
+}
+
 async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
+  // Starting a new run cancels any pending resume from a previous run.
+  await clearPendingRun();
+
   const runCtx = { openedFacebookTabIds: new Set() };
   try {
     const settings = await getSettings();
@@ -635,19 +653,13 @@ async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
     }
 
     await appendLog("info", `${manual ? "Manual" : "Scheduled"} run started.`);
-    if (wantsTimeline) {
-      await appendLog("info", "Timeline posting is enabled.");
-    }
-    if (wantsMessenger) {
-      await appendLog("info", "Messenger Beta mode enabled: sending private messages via Messenger threads.");
-    }
+    if (wantsTimeline) await appendLog("info", "Timeline posting is enabled.");
+    if (wantsMessenger) await appendLog("info", "Messenger Beta mode enabled: sending private messages via Messenger threads.");
 
     let tokens;
     try {
       tokens = await fetchAuthTokens(runCtx);
-      if (!tokens) {
-        return { ok: false, error: FB_LOGIN_REQUIRED_MESSAGE };
-      }
+      if (!tokens) return { ok: false, error: FB_LOGIN_REQUIRED_MESSAGE };
       await appendLog("info", "Facebook tokens acquired.");
     } catch (err) {
       await appendLog("error", "Failed to acquire Facebook tokens.", { error: String(err) });
@@ -664,13 +676,55 @@ async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
       return { ok: false, error: msg };
     }
 
-    const actorId = birthdayData.userId;
-    const fb_dtsg = tokens.fb_dtsg; // use latest
+    const initialState = {
+      mode,
+      manual,
+      birthdays: birthdayData.birthdays,
+      actorId: birthdayData.userId,
+      nextIndex: 0,
+      postedTimeline: 0,
+      sentMessenger: 0
+    };
 
-    let postedTimeline = 0;
-    let sentMessenger = 0;
-    for (let i = 0; i < birthdayData.birthdays.length; i++) {
-      const b = birthdayData.birthdays[i];
+    return await processBirthdayQueue(initialState, runCtx, tokens);
+  } finally {
+    await closeRunOpenedFacebookTabs(runCtx);
+  }
+}
+
+// Processes recipients starting from state.nextIndex. If a long inter-recipient delay
+// is needed, persists state and schedules a chrome.alarm to resume — this survives
+// Chrome service worker termination, which is the whole point of this refactor.
+async function processBirthdayQueue(state, runCtx = null, tokens = null) {
+  if (!runCtx) runCtx = { openedFacebookTabIds: new Set() };
+
+  try {
+    const settings = await getSettings();
+    const wantsTimeline = !!settings.enabled && state.mode !== "messenger";
+    const wantsMessenger = !!settings.messengerBetaEnabled && state.mode !== "timeline";
+
+    // On resume we have no tokens — fb_dtsg may have rotated during the wait, so refetch.
+    if (!tokens) {
+      try {
+        tokens = await fetchAuthTokens(runCtx);
+      } catch (err) {
+        await appendLog("error", "Failed to acquire tokens on resume.", { error: String(err) });
+        await clearPendingRun();
+        return { ok: false, error: String(err) };
+      }
+      if (!tokens) {
+        await appendLog("error", "No Facebook tokens on resume; aborting.");
+        await clearPendingRun();
+        return { ok: false, error: FB_LOGIN_REQUIRED_MESSAGE };
+      }
+      await appendLog("info", `Resuming birthday run at recipient ${state.nextIndex + 1}/${state.birthdays.length}.`);
+    }
+
+    const fb_dtsg = tokens.fb_dtsg;
+    const actorId = state.actorId || tokens.userId;
+
+    for (let i = state.nextIndex; i < state.birthdays.length; i++) {
+      const b = state.birthdays[i];
       const alreadyTimeline = wantsTimeline ? await wasSentToday(b.id, "timeline") : true;
       const alreadyMessenger = wantsMessenger ? await wasSentToday(b.id, "messenger") : true;
       if (alreadyTimeline && alreadyMessenger) {
@@ -695,7 +749,6 @@ async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
 
       if (wantsTimeline && !alreadyTimeline) {
         try {
-          // Random pause before posting — simulates a human reading/thinking before writing
           const preDelay = randomInt(PRE_ACTION_DELAY_MIN_MS, PRE_ACTION_DELAY_MAX_MS);
           await sleep(preDelay);
           const res = await postHappyBirthday({ fb_dtsg, lsd: tokens.lsd, userId: tokens.userId, actorId, friendId: b.id, messageText: timelineMessage, runCtx });
@@ -704,7 +757,7 @@ async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
             friendId: b.id,
             status: res?.errors ? "posted_with_graphql_errors" : "posted"
           });
-          postedTimeline++;
+          state.postedTimeline++;
         } catch (err) {
           await appendLog("error", `Failed to post to ${b.name || b.id}.`, { friendId: b.id, error: String(err) });
         }
@@ -712,7 +765,6 @@ async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
 
       if (wantsMessenger && !alreadyMessenger) {
         try {
-          // Random pause before DM — simulates browsing before opening a conversation
           const preDelay = randomInt(PRE_ACTION_DELAY_MIN_MS, PRE_ACTION_DELAY_MAX_MS);
           await sleep(preDelay);
           const dmRes = await sendPrivateMessage({
@@ -725,24 +777,31 @@ async function runBirthdayPosting({ manual = false, mode = "both" } = {}) {
             friendId: b.id,
             status: dmRes?.detail || "dm_sent"
           });
-          sentMessenger++;
+          state.sentMessenger++;
         } catch (err) {
           await appendLog("error", `Failed to send private message to ${b.name || b.id}.`, { friendId: b.id, error: String(err) });
         }
       }
 
-      const hasMoreRecipients = i < birthdayData.birthdays.length - 1;
+      const hasMoreRecipients = i < state.birthdays.length - 1;
       const attemptedDelivery = (!alreadyTimeline && wantsTimeline) || (!alreadyMessenger && wantsMessenger);
       if (hasMoreRecipients && attemptedDelivery) {
         const delayMs = randomInt(INTER_RECIPIENT_DELAY_MIN_MS, INTER_RECIPIENT_DELAY_MAX_MS);
         const delaySeconds = Math.round(delayMs / 1000);
-        await appendLog("info", `Waiting ${delaySeconds} seconds before the next birthday recipient.`, { friendId: b.id });
-        await sleep(delayMs);
+        const resumeAt = new Date(Date.now() + delayMs);
+        await appendLog("info", `Waiting ${delaySeconds}s before next recipient. Resume scheduled for ${resumeAt.toLocaleTimeString()} (works even if Chrome closes the dashboard).`, { friendId: b.id });
+
+        // Persist state and schedule alarm-based resume; alarms survive service worker termination.
+        const nextState = { ...state, nextIndex: i + 1 };
+        await savePendingRun(nextState, delayMs);
+        return { ok: true, paused: true };
       }
     }
 
-    await appendLog("info", `Run finished. Timeline posted: ${postedTimeline}. Private messages sent: ${sentMessenger}.`);
-    return { ok: true, posted: postedTimeline, messaged: sentMessenger };
+    // Queue drained — run is fully complete.
+    await appendLog("info", `Run finished. Timeline posted: ${state.postedTimeline}. Private messages sent: ${state.sentMessenger}.`);
+    await clearPendingRun();
+    return { ok: true, posted: state.postedTimeline, messaged: state.sentMessenger };
   } finally {
     await closeRunOpenedFacebookTabs(runCtx);
   }
@@ -836,6 +895,22 @@ async function ensureScheduledAlarms(settings, source = "save") {
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm?.name === ALARM_RESUME) {
+    try {
+      const res = await chrome.storage.local.get(STORAGE_PENDING_RUN);
+      const state = res[STORAGE_PENDING_RUN];
+      if (!state) {
+        await appendLog("info", "Resume alarm fired but no pending state was found. Skipping.");
+        return;
+      }
+      await processBirthdayQueue(state);
+    } catch (err) {
+      await appendLog("error", "Resumed run crashed.", { error: String(err) });
+      await clearPendingRun();
+    }
+    return;
+  }
+
   if (alarm?.name === ALARM_TIMELINE) {
     try {
       await runBirthdayPosting({ manual: false, mode: "timeline" });
